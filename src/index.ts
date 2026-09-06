@@ -26,7 +26,7 @@ function validEmail(email: string): boolean {
   return /^\S+@\S+\.\S+$/.test(email || '');
 }
 
-function validateAccount(input: MailAccountInput): string | null {
+function validateAccount(input: MailAccountInput, requirePassword = true): string | null {
   if (!input.label?.trim()) return 'Label is required';
   if (!validEmail(input.email)) return 'A valid email address is required';
   if (!validHost(input.imapHost || '') || !validHost(input.smtpHost || '')) return 'Invalid mail server hostname';
@@ -34,7 +34,7 @@ function validateAccount(input: MailAccountInput): string | null {
   if (input.smtpPort === 25) return 'SMTP port 25 is blocked by Cloudflare Workers; use 465 or 587';
   if (!['tls', 'starttls'].includes(input.imapSecurity)) return 'IMAP must use TLS or STARTTLS';
   if (!['tls', 'starttls'].includes(input.smtpSecurity)) return 'SMTP must use TLS or STARTTLS';
-  if (!input.username || !input.password) return 'Username and password/app password are required';
+  if (!input.username || (requirePassword && !input.password)) return requirePassword ? 'Username and password/app password are required' : 'Username is required';
   return null;
 }
 
@@ -110,9 +110,6 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json({ ok: true }, 200, { 'Set-Cookie': 'cloudmail_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
   }
 
-  // OAuth callbacks are intentionally handled before session validation. Microsoft redirects
-  // from another site, so a SameSite=Strict CloudMail session cookie is not guaranteed here.
-  // The one-time random state stored in D1 is the CSRF/correlation check for this callback.
   if (path === '/api/oauth/microsoft/callback' && request.method === 'GET') {
     const state = url.searchParams.get('state') || '';
     const code = url.searchParams.get('code') || '';
@@ -186,6 +183,43 @@ async function api(request: Request, env: Env): Promise<Response> {
   }
 
   const accountMatch = path.match(/^\/api\/accounts\/([^/]+)$/);
+  if (accountMatch && request.method === 'PUT') {
+    const account = await getAccount(env, accountMatch[1]);
+    if (!account) return json({ error: 'Account not found' }, 404);
+    const input = await request.json() as MailAccountInput;
+
+    if (account.auth_type === 'oauth_microsoft') {
+      if (!input.label?.trim()) return json({ error: 'Label is required' }, 400);
+      await env.DB.prepare('UPDATE mail_accounts SET label = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .bind(input.label.trim(), account.id).run();
+    } else {
+      const invalid = validateAccount(input, false);
+      if (invalid) return json({ error: invalid }, 400);
+      if (input.password?.trim()) {
+        const encrypted = await encryptCredential(env.CREDENTIAL_KEY, input.password);
+        await env.DB.prepare(`UPDATE mail_accounts SET
+          label = ?, email = ?, imap_host = ?, imap_port = ?, imap_security = ?,
+          smtp_host = ?, smtp_port = ?, smtp_security = ?, username = ?,
+          credential_ciphertext = ?, credential_iv = ?, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`)
+          .bind(input.label.trim(), input.email.trim(), input.imapHost.trim(), input.imapPort, input.imapSecurity,
+            input.smtpHost.trim(), input.smtpPort, input.smtpSecurity, input.username.trim(),
+            encrypted.ciphertext, encrypted.iv, account.id).run();
+      } else {
+        await env.DB.prepare(`UPDATE mail_accounts SET
+          label = ?, email = ?, imap_host = ?, imap_port = ?, imap_security = ?,
+          smtp_host = ?, smtp_port = ?, smtp_security = ?, username = ?,
+          last_error = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`)
+          .bind(input.label.trim(), input.email.trim(), input.imapHost.trim(), input.imapPort, input.imapSecurity,
+            input.smtpHost.trim(), input.smtpPort, input.smtpSecurity, input.username.trim(), account.id).run();
+      }
+    }
+
+    const updated = await getAccount(env, account.id);
+    return json({ account: publicAccount(updated!) });
+  }
+
   if (accountMatch && request.method === 'DELETE') {
     await env.DB.prepare('DELETE FROM mail_accounts WHERE id = ?').bind(accountMatch[1]).run();
     return json({ ok: true });
