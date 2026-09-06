@@ -8,9 +8,21 @@ const presets = {
   custom: { imapHost: '', imapPort: 993, imapSecurity: 'tls', smtpHost: '', smtpPort: 465, smtpSecurity: 'tls' }
 };
 
+let toastTimer = null;
 function toast(message, bad = false) {
-  const t = $('#toast'); t.textContent = message; t.className = bad ? 'show bad' : 'show';
-  setTimeout(() => t.className = '', 4200);
+  const t = $('#toast');
+  t.textContent = message;
+  t.className = bad ? 'show bad' : 'show';
+  if (typeof t.showPopover === 'function') {
+    try { if (!t.matches(':popover-open')) t.showPopover(); } catch {}
+  }
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    t.className = '';
+    if (typeof t.hidePopover === 'function') {
+      try { if (t.matches(':popover-open')) t.hidePopover(); } catch {}
+    }
+  }, 4200);
 }
 async function api(path, options = {}) {
   const res = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
