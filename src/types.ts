@@ -11,6 +11,15 @@ export interface Env {
 
 export type SecurityMode = 'tls' | 'starttls' | 'plain';
 export type AuthType = 'password' | 'oauth_microsoft';
+export type ProxyMode = 'direct' | 'socks5';
+
+export interface ProxyConfig {
+  mode: ProxyMode;
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+}
 
 export interface MailAccountInput {
   label: string;
@@ -24,6 +33,11 @@ export interface MailAccountInput {
   smtpSecurity: SecurityMode;
   username: string;
   password: string;
+  proxyMode?: ProxyMode;
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  proxyPassword?: string;
 }
 
 export interface StoredAccount {
@@ -41,6 +55,12 @@ export interface StoredAccount {
   username: string;
   credential_ciphertext: string;
   credential_iv: string;
+  proxy_mode: ProxyMode | null;
+  proxy_host: string | null;
+  proxy_port: number | null;
+  proxy_username: string | null;
+  proxy_password_ciphertext: string | null;
+  proxy_password_iv: string | null;
   created_at: string;
   updated_at: string;
   last_ok_at: string | null;
