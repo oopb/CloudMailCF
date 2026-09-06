@@ -3,6 +3,14 @@
   "name": "cloudmail-cf",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
+  "keep_vars": true,
+  "secrets": {
+    "required": [
+      "ADMIN_PASSWORD",
+      "SESSION_SECRET",
+      "CREDENTIAL_KEY"
+    ]
+  },
   "observability": { "enabled": true },
   "assets": {
     "directory": "./public",
