@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-const state = { accounts: [], messages: [] };
+const state = { accounts: [], messages: [], editingAccountId: null };
 
 const presets = {
   qq: { imapHost: 'imap.qq.com', imapPort: 993, imapSecurity: 'tls', smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecurity: 'tls' },
@@ -47,6 +47,87 @@ $('#loginForm').addEventListener('submit', async e => {
   } catch (e) { toast(e.message, true); }
 });
 
+function closeAccountMenus(except = null) {
+  document.querySelectorAll('.account-menu.open').forEach(menu => {
+    if (menu !== except) menu.classList.remove('open');
+  });
+}
+
+document.addEventListener('click', () => closeAccountMenus());
+
+async function testAccount(a) {
+  closeAccountMenus();
+  toast(`正在测试 ${a.label}…`);
+  try {
+    await api(`/api/accounts/${a.id}/test`, { method: 'POST' });
+    toast(`${a.label} 连接成功`);
+  } catch (err) {
+    toast(`${a.label} 连接失败：${err.message}`, true);
+  }
+  await loadAccounts();
+}
+
+async function deleteAccount(a) {
+  closeAccountMenus();
+  if (!confirm(`删除 ${a.email} 的云端配置？不会删除邮箱服务器里的邮件。`)) return;
+  await api(`/api/accounts/${a.id}`, { method: 'DELETE' });
+  toast('邮箱配置已删除');
+  await loadAccounts(); await loadInbox();
+}
+
+function prepareAddDialog() {
+  state.editingAccountId = null;
+  $('#accountForm').reset();
+  $('#provider').disabled = false;
+  $('#email').readOnly = false;
+  $('#username').dataset.touched = '';
+  $('#mailPassword').placeholder = '';
+  $('#accountDialog .modal-head h3').textContent = '添加邮箱';
+  $('#accountDialog .modal-head p').textContent = 'QQ/Gmail/通用邮箱使用密码或授权码；Outlook / Microsoft 365 使用 Microsoft OAuth。';
+  $('#provider').value = 'qq';
+  applyPreset('qq');
+  $('#saveAccountBtn').textContent = '保存邮箱';
+}
+
+function openEditAccount(a) {
+  closeAccountMenus();
+  state.editingAccountId = a.id;
+  $('#accountForm').reset();
+  $('#provider').value = a.provider || 'custom';
+  $('#provider').disabled = true;
+  $('#label').value = a.label || '';
+  $('#email').value = a.email || '';
+  $('#username').value = a.username || '';
+  $('#imapHost').value = a.imapHost || '';
+  $('#imapPort').value = a.imapPort || 993;
+  $('#imapSecurity').value = a.imapSecurity || 'tls';
+  $('#smtpHost').value = a.smtpHost || '';
+  $('#smtpPort').value = a.smtpPort || 465;
+  $('#smtpSecurity').value = a.smtpSecurity || 'tls';
+  $('#mailPassword').value = '';
+  $('#mailPassword').placeholder = '留空则保持现有密码 / 授权码';
+  $('#accountDialog .modal-head h3').textContent = '编辑邮箱设置';
+
+  if (a.authType === 'oauth_microsoft') {
+    $('#credentialFields').classList.add('hidden');
+    $('#microsoftOauthFields').classList.add('hidden');
+    $('#saveAccountBtn').classList.remove('hidden');
+    $('#saveAccountBtn').textContent = '保存修改';
+    $('#email').readOnly = true;
+    $('#accountDialog .modal-head p').textContent = 'Microsoft OAuth 账户当前可修改显示名称；邮箱地址和认证信息由 Microsoft 授权维护。';
+  } else {
+    $('#credentialFields').classList.remove('hidden');
+    $('#microsoftOauthFields').classList.add('hidden');
+    $('#saveAccountBtn').classList.remove('hidden');
+    $('#saveAccountBtn').textContent = '保存修改';
+    $('#email').readOnly = false;
+    $('#accountDialog .modal-head p').textContent = '可修改邮箱地址、服务器、用户名；密码留空则保持现有凭据。';
+    for (const id of ['username', 'imapHost', 'imapPort', 'smtpHost', 'smtpPort']) $(`#${id}`).required = true;
+    $('#mailPassword').required = false;
+  }
+  $('#accountDialog').showModal();
+}
+
 async function loadAccounts() {
   const data = await api('/api/accounts'); state.accounts = data.accounts;
   const list = $('#accountList'); list.innerHTML = '';
@@ -54,11 +135,31 @@ async function loadAccounts() {
   for (const a of state.accounts) {
     const item = document.createElement('div'); item.className = 'account-item';
     const oauthBadge = a.authType === 'oauth_microsoft' ? ' · OAuth' : '';
-    item.innerHTML = `<span class="dot ${a.lastError ? 'error' : ''}"></span><div><strong>${esc(a.label)}</strong><small>${esc(a.email)}${oauthBadge}</small></div><button title="删除">×</button>`;
-    item.querySelector('button').onclick = async () => {
-      if (!confirm(`删除 ${a.email} 的云端配置？不会删除邮箱服务器里的邮件。`)) return;
-      await api(`/api/accounts/${a.id}`, { method: 'DELETE' }); toast('邮箱配置已删除'); await loadAccounts(); await loadInbox();
+    item.innerHTML = `
+      <span class="dot ${a.lastError ? 'error' : ''}"></span>
+      <div class="account-info"><strong>${esc(a.label)}</strong><small>${esc(a.email)}${oauthBadge}</small></div>
+      <div class="account-actions">
+        <button class="account-menu-btn" type="button" title="更多操作" aria-label="${esc(a.label)} 更多操作">•••</button>
+        <div class="account-menu" role="menu">
+          <button type="button" data-action="edit" role="menuitem">编辑设置</button>
+          <button type="button" data-action="test" role="menuitem">测试连接</button>
+          <div class="menu-separator"></div>
+          <button type="button" class="danger" data-action="delete" role="menuitem">删除邮箱</button>
+        </div>
+      </div>`;
+
+    const menu = item.querySelector('.account-menu');
+    item.querySelector('.account-menu-btn').onclick = e => {
+      e.stopPropagation();
+      const willOpen = !menu.classList.contains('open');
+      closeAccountMenus(menu);
+      menu.classList.toggle('open', willOpen);
     };
+    menu.onclick = e => e.stopPropagation();
+    menu.querySelector('[data-action="edit"]').onclick = () => openEditAccount(a);
+    menu.querySelector('[data-action="test"]').onclick = () => testAccount(a);
+    menu.querySelector('[data-action="delete"]').onclick = () => deleteAccount(a);
+
     list.appendChild(item);
     const opt = document.createElement('option'); opt.value = a.id; opt.textContent = `${a.label} · ${a.email}`; select.appendChild(opt);
   }
@@ -103,8 +204,8 @@ async function openMessage(m) {
 $('#closeReader').onclick = () => $('#reader').classList.add('hidden');
 $('#refreshBtn').onclick = async () => { await loadAccounts(); await loadInbox(); };
 $('#logoutBtn').onclick = async () => { await api('/api/logout', { method: 'POST' }); location.reload(); };
-$('#addAccountBtn').onclick = () => { applyPreset($('#provider').value); $('#accountDialog').showModal(); };
-document.querySelectorAll('.close-dialog').forEach(b => b.onclick = () => $('#accountDialog').close());
+$('#addAccountBtn').onclick = () => { prepareAddDialog(); $('#accountDialog').showModal(); };
+document.querySelectorAll('.close-dialog').forEach(b => b.onclick = () => { state.editingAccountId = null; $('#accountDialog').close(); });
 $('#provider').onchange = e => applyPreset(e.target.value);
 $('#email').oninput = e => { if (!$('#username').dataset.touched) $('#username').value = e.target.value; };
 $('#username').oninput = () => $('#username').dataset.touched = '1';
@@ -135,21 +236,35 @@ $('#microsoftOAuthBtn').onclick = async () => {
 
 $('#accountForm').addEventListener('submit', async e => {
   e.preventDefault();
-  if ($('#provider').value === 'outlook') return;
-  const b = $('#saveAccountBtn'); b.disabled = true; b.textContent = '保存中…';
+  const editing = state.editingAccountId ? state.accounts.find(a => a.id === state.editingAccountId) : null;
+  const b = $('#saveAccountBtn'); b.disabled = true; b.textContent = editing ? '保存中…' : '保存中…';
+
+  if (!editing && $('#provider').value === 'outlook') { b.disabled = false; return; }
+
   const body = {
     provider: $('#provider').value, label: $('#label').value, email: $('#email').value, username: $('#username').value,
     password: $('#mailPassword').value, imapHost: $('#imapHost').value, imapPort: Number($('#imapPort').value), imapSecurity: $('#imapSecurity').value,
     smtpHost: $('#smtpHost').value, smtpPort: Number($('#smtpPort').value), smtpSecurity: $('#smtpSecurity').value
   };
+
   try {
-    const created = await api('/api/accounts', { method: 'POST', body: JSON.stringify(body) });
-    $('#accountDialog').close(); $('#accountForm').reset(); $('#username').dataset.touched = ''; $('#provider').value = 'qq'; applyPreset('qq');
-    toast('邮箱已保存，正在测试 IMAP…'); await loadAccounts();
-    try { await api(`/api/accounts/${created.account.id}/test`, { method: 'POST' }); toast('连接成功'); } catch (err) { toast(`已保存，但连接测试失败：${err.message}`, true); }
-    await loadAccounts(); await loadInbox();
+    if (editing) {
+      const updated = await api(`/api/accounts/${editing.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      $('#accountDialog').close(); state.editingAccountId = null;
+      toast('邮箱设置已更新');
+      await loadAccounts();
+      try { await api(`/api/accounts/${updated.account.id}/test`, { method: 'POST' }); toast('设置已保存，连接测试成功'); }
+      catch (err) { toast(`设置已保存，但连接测试失败：${err.message}`, true); }
+      await loadAccounts(); await loadInbox();
+    } else {
+      const created = await api('/api/accounts', { method: 'POST', body: JSON.stringify(body) });
+      $('#accountDialog').close(); $('#accountForm').reset(); $('#username').dataset.touched = ''; $('#provider').value = 'qq'; applyPreset('qq');
+      toast('邮箱已保存，正在测试 IMAP…'); await loadAccounts();
+      try { await api(`/api/accounts/${created.account.id}/test`, { method: 'POST' }); toast('连接成功'); } catch (err) { toast(`已保存，但连接测试失败：${err.message}`, true); }
+      await loadAccounts(); await loadInbox();
+    }
   } catch (err) { toast(err.message, true); }
-  finally { b.disabled = false; b.textContent = '保存邮箱'; }
+  finally { b.disabled = false; b.textContent = state.editingAccountId ? '保存修改' : '保存邮箱'; }
 });
 
 $('#composeBtn').onclick = () => state.accounts.length ? $('#composeDialog').showModal() : toast('请先添加邮箱', true);
@@ -170,5 +285,5 @@ function initials(s='') { const x = displayFrom(s); return (x[0] || '?').toUpper
 function fmtDate(s) { const d = new Date(s); if (isNaN(d)) return ''; const now = new Date(); return d.toDateString() === now.toDateString() ? d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString([], {month:'short',day:'numeric'}); }
 function fmtDateLong(s) { const d = new Date(s); return isNaN(d) ? s : d.toLocaleString(); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
-applyPreset('qq');
+prepareAddDialog();
 bootstrap().catch(e => toast(e.message, true));
