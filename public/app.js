@@ -10,7 +10,7 @@ const presets = {
 
 function toast(message, bad = false) {
   const t = $('#toast'); t.textContent = message; t.className = bad ? 'show bad' : 'show';
-  setTimeout(() => t.className = '', 3200);
+  setTimeout(() => t.className = '', 4200);
 }
 
 async function api(path, options = {}) {
@@ -20,7 +20,18 @@ async function api(path, options = {}) {
   return data;
 }
 
+function handleOAuthResult() {
+  const u = new URL(location.href);
+  if (u.searchParams.get('oauth') !== 'microsoft') return;
+  const ok = u.searchParams.get('status') === 'success';
+  const message = u.searchParams.get('message');
+  toast(ok ? 'Microsoft 邮箱授权成功' : `Microsoft 授权失败：${message || '未知错误'}`, !ok);
+  u.searchParams.delete('oauth'); u.searchParams.delete('status'); u.searchParams.delete('message');
+  history.replaceState(null, '', u.pathname + u.search + u.hash);
+}
+
 async function bootstrap() {
+  handleOAuthResult();
   const s = await api('/api/session');
   if (!s.authenticated) { $('#loginView').classList.remove('hidden'); return; }
   $('#appView').classList.remove('hidden');
@@ -42,7 +53,8 @@ async function loadAccounts() {
   const select = $('#composeAccount'); select.innerHTML = '';
   for (const a of state.accounts) {
     const item = document.createElement('div'); item.className = 'account-item';
-    item.innerHTML = `<span class="dot ${a.lastError ? 'error' : ''}"></span><div><strong>${esc(a.label)}</strong><small>${esc(a.email)}</small></div><button title="删除">×</button>`;
+    const oauthBadge = a.authType === 'oauth_microsoft' ? ' · OAuth' : '';
+    item.innerHTML = `<span class="dot ${a.lastError ? 'error' : ''}"></span><div><strong>${esc(a.label)}</strong><small>${esc(a.email)}${oauthBadge}</small></div><button title="删除">×</button>`;
     item.querySelector('button').onclick = async () => {
       if (!confirm(`删除 ${a.email} 的云端配置？不会删除邮箱服务器里的邮件。`)) return;
       await api(`/api/accounts/${a.id}`, { method: 'DELETE' }); toast('邮箱配置已删除'); await loadAccounts(); await loadInbox();
@@ -99,10 +111,31 @@ $('#username').oninput = () => $('#username').dataset.touched = '1';
 
 function applyPreset(name) {
   const p = presets[name]; for (const [k, v] of Object.entries(p)) $(`#${k}`).value = v;
+  const isMicrosoft = name === 'outlook';
+  $('#credentialFields').classList.toggle('hidden', isMicrosoft);
+  $('#microsoftOauthFields').classList.toggle('hidden', !isMicrosoft);
+  $('#saveAccountBtn').classList.toggle('hidden', isMicrosoft);
+  for (const id of ['username', 'mailPassword', 'imapHost', 'imapPort', 'smtpHost', 'smtpPort']) {
+    $(`#${id}`).required = !isMicrosoft;
+  }
 }
+
+$('#microsoftOAuthBtn').onclick = async () => {
+  const label = $('#label').value.trim();
+  const email = $('#email').value.trim();
+  if (!label || !email) { toast('请先填写显示名称和 Microsoft 邮箱地址', true); return; }
+  const b = $('#microsoftOAuthBtn'); b.disabled = true; b.textContent = '正在前往 Microsoft…';
+  try {
+    const data = await api('/api/oauth/microsoft/start', { method: 'POST', body: JSON.stringify({ label, email }) });
+    location.href = data.url;
+  } catch (err) {
+    toast(err.message, true); b.disabled = false; b.textContent = '使用 Microsoft 登录并授权';
+  }
+};
 
 $('#accountForm').addEventListener('submit', async e => {
   e.preventDefault();
+  if ($('#provider').value === 'outlook') return;
   const b = $('#saveAccountBtn'); b.disabled = true; b.textContent = '保存中…';
   const body = {
     provider: $('#provider').value, label: $('#label').value, email: $('#email').value, username: $('#username').value,
@@ -111,7 +144,7 @@ $('#accountForm').addEventListener('submit', async e => {
   };
   try {
     const created = await api('/api/accounts', { method: 'POST', body: JSON.stringify(body) });
-    $('#accountDialog').close(); $('#accountForm').reset(); $('#username').dataset.touched = ''; applyPreset('qq');
+    $('#accountDialog').close(); $('#accountForm').reset(); $('#username').dataset.touched = ''; $('#provider').value = 'qq'; applyPreset('qq');
     toast('邮箱已保存，正在测试 IMAP…'); await loadAccounts();
     try { await api(`/api/accounts/${created.account.id}/test`, { method: 'POST' }); toast('连接成功'); } catch (err) { toast(`已保存，但连接测试失败：${err.message}`, true); }
     await loadAccounts(); await loadInbox();
@@ -137,4 +170,5 @@ function initials(s='') { const x = displayFrom(s); return (x[0] || '?').toUpper
 function fmtDate(s) { const d = new Date(s); if (isNaN(d)) return ''; const now = new Date(); return d.toDateString() === now.toDateString() ? d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString([], {month:'short',day:'numeric'}); }
 function fmtDateLong(s) { const d = new Date(s); return isNaN(d) ? s : d.toLocaleString(); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+applyPreset('qq');
 bootstrap().catch(e => toast(e.message, true));
