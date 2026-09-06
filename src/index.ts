@@ -1,4 +1,4 @@
-import type { Env, MailAccountInput, OAuthStateRow, ProxyConfig, StoredAccount } from './types';
+import type { Env, MailAccountInput, OAuthStateRow, ProxyConfig, ShadowsocksMethod, StoredAccount } from './types';
 import { createSession, decryptCredential, encryptCredential, getCookie, verifyAdminPassword, verifySession } from './lib/crypto';
 import { withImap, type ImapConfig } from './lib/imap';
 import { parseMessage } from './lib/mime';
@@ -6,6 +6,11 @@ import { exchangeMicrosoftCode, microsoftAccessToken, microsoftAuthorizeUrl } fr
 import { sendMail, type SmtpConfig } from './lib/smtp';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+const SS_METHODS: ShadowsocksMethod[] = [
+  'aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305',
+  '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
+  '2022-blake3-chacha20-poly1305', '2022-blake3-chacha8-poly1305'
+];
 
 function json(data: unknown, status = 200, extra: HeadersInit = {}): Response {
   const headers = new Headers(JSON_HEADERS);
@@ -21,22 +26,23 @@ function errorMessage(err: unknown): string {
 function validHost(host: string): boolean {
   return /^[a-z0-9.-]+$/i.test(host) && host.length <= 253 && !/^(localhost|0\.0\.0\.0|127\.)/i.test(host);
 }
+function validEmail(email: string): boolean { return /^\S+@\S+\.\S+$/.test(email || ''); }
 
-function validEmail(email: string): boolean {
-  return /^\S+@\S+\.\S+$/.test(email || '');
-}
-
-function validateProxy(input: MailAccountInput): string | null {
+function validateProxy(input: MailAccountInput, existing?: StoredAccount): string | null {
   const mode = input.proxyMode || 'direct';
-  if (!['direct', 'socks5'].includes(mode)) return 'Invalid proxy mode';
-  if (mode === 'socks5') {
-    if (!validHost(input.proxyHost || '')) return 'A valid SOCKS5 proxy hostname is required';
-    if (!Number.isInteger(input.proxyPort) || Number(input.proxyPort) < 1 || Number(input.proxyPort) > 65535) return 'Invalid SOCKS5 proxy port';
+  if (!['direct', 'socks5', 'shadowsocks'].includes(mode)) return 'Invalid proxy mode';
+  if (mode === 'direct') return null;
+  if (!validHost(input.proxyHost || '')) return mode === 'socks5' ? 'A valid SOCKS5 proxy hostname is required' : 'A valid Shadowsocks server hostname is required';
+  if (!Number.isInteger(input.proxyPort) || Number(input.proxyPort) < 1 || Number(input.proxyPort) > 65535) return `Invalid ${mode === 'socks5' ? 'SOCKS5' : 'Shadowsocks'} port`;
+  if (mode === 'shadowsocks') {
+    if (!input.proxyMethod || !SS_METHODS.includes(input.proxyMethod)) return 'A supported Shadowsocks encryption method is required';
+    const canReuse = existing?.proxy_mode === 'shadowsocks' && !!existing.proxy_password_ciphertext;
+    if (!input.proxyPassword && !canReuse) return 'Shadowsocks password / PSK is required';
   }
   return null;
 }
 
-function validateAccount(input: MailAccountInput, requirePassword = true): string | null {
+function validateAccount(input: MailAccountInput, requirePassword = true, existing?: StoredAccount): string | null {
   if (!input.label?.trim()) return 'Label is required';
   if (!validEmail(input.email)) return 'A valid email address is required';
   if (!validHost(input.imapHost || '') || !validHost(input.smtpHost || '')) return 'Invalid mail server hostname';
@@ -45,7 +51,7 @@ function validateAccount(input: MailAccountInput, requirePassword = true): strin
   if (!['tls', 'starttls'].includes(input.imapSecurity)) return 'IMAP must use TLS or STARTTLS';
   if (!['tls', 'starttls'].includes(input.smtpSecurity)) return 'SMTP must use TLS or STARTTLS';
   if (!input.username || (requirePassword && !input.password)) return requirePassword ? 'Username and password/app password are required' : 'Username is required';
-  return validateProxy(input);
+  return validateProxy(input, existing);
 }
 
 function publicAccount(a: StoredAccount) {
@@ -55,7 +61,7 @@ function publicAccount(a: StoredAccount) {
     smtpHost: a.smtp_host, smtpPort: a.smtp_port, smtpSecurity: a.smtp_security,
     username: a.username,
     proxyMode: a.proxy_mode || 'direct', proxyHost: a.proxy_host || '', proxyPort: a.proxy_port || 1080,
-    proxyUsername: a.proxy_username || '', hasProxyPassword: !!a.proxy_password_ciphertext,
+    proxyUsername: a.proxy_username || '', proxyMethod: a.proxy_method || '', hasProxyPassword: !!a.proxy_password_ciphertext,
     createdAt: a.created_at, updatedAt: a.updated_at, lastOkAt: a.last_ok_at, lastError: a.last_error
   };
 }
@@ -63,21 +69,21 @@ function publicAccount(a: StoredAccount) {
 async function getAccount(env: Env, id: string): Promise<StoredAccount | null> {
   return await env.DB.prepare('SELECT * FROM mail_accounts WHERE id = ?').bind(id).first<StoredAccount>();
 }
-
 async function accountSecret(env: Env, account: StoredAccount): Promise<string> {
   return decryptCredential(env.CREDENTIAL_KEY, account.credential_ciphertext, account.credential_iv);
 }
 
 async function proxyCfg(env: Env, account: StoredAccount): Promise<ProxyConfig | undefined> {
-  if ((account.proxy_mode || 'direct') !== 'socks5') return undefined;
+  const mode = account.proxy_mode || 'direct';
+  if (mode === 'direct') return undefined;
   let password = '';
   if (account.proxy_password_ciphertext && account.proxy_password_iv) {
     password = await decryptCredential(env.CREDENTIAL_KEY, account.proxy_password_ciphertext, account.proxy_password_iv);
   }
-  return {
-    mode: 'socks5', host: account.proxy_host || undefined, port: account.proxy_port || undefined,
-    username: account.proxy_username || undefined, password: password || undefined
-  };
+  if (mode === 'socks5') {
+    return { mode, host: account.proxy_host || undefined, port: account.proxy_port || undefined, username: account.proxy_username || undefined, password: password || undefined };
+  }
+  return { mode: 'shadowsocks', host: account.proxy_host || undefined, port: account.proxy_port || undefined, password: password || undefined, ssMethod: account.proxy_method || undefined };
 }
 
 async function imapCfg(env: Env, account: StoredAccount): Promise<ImapConfig> {
@@ -101,40 +107,35 @@ async function smtpCfg(env: Env, account: StoredAccount): Promise<SmtpConfig> {
 }
 
 async function proxyValues(env: Env, input: MailAccountInput, existing?: StoredAccount) {
-  if ((input.proxyMode || 'direct') !== 'socks5') return { mode: 'direct', host: null, port: null, username: null, ciphertext: null, iv: null };
-  let ciphertext = existing?.proxy_password_ciphertext || null;
-  let iv = existing?.proxy_password_iv || null;
+  const mode = input.proxyMode || 'direct';
+  if (mode === 'direct') return { mode: 'direct', host: null, port: null, username: null, method: null, ciphertext: null, iv: null };
+
+  const canReuse = existing?.proxy_mode === mode && !!existing.proxy_password_ciphertext;
+  let ciphertext = canReuse ? existing!.proxy_password_ciphertext : null;
+  let iv = canReuse ? existing!.proxy_password_iv : null;
   if (input.proxyPassword) {
     const encrypted = await encryptCredential(env.CREDENTIAL_KEY, input.proxyPassword);
     ciphertext = encrypted.ciphertext; iv = encrypted.iv;
   }
-  return {
-    mode: 'socks5', host: input.proxyHost!.trim(), port: input.proxyPort!, username: input.proxyUsername?.trim() || null,
-    ciphertext, iv
-  };
+
+  if (mode === 'socks5') {
+    return { mode, host: input.proxyHost!.trim(), port: input.proxyPort!, username: input.proxyUsername?.trim() || null, method: null, ciphertext, iv };
+  }
+  return { mode, host: input.proxyHost!.trim(), port: input.proxyPort!, username: null, method: input.proxyMethod!, ciphertext, iv };
 }
 
 async function markAccount(env: Env, id: string, ok: boolean, message: string | null = null) {
   if (ok) await env.DB.prepare("UPDATE mail_accounts SET last_ok_at = CURRENT_TIMESTAMP, last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
   else await env.DB.prepare("UPDATE mail_accounts SET last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(message, id).run();
 }
-
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get('Origin');
-  if (!origin) return true;
-  return origin === new URL(request.url).origin;
-}
-
+function sameOrigin(request: Request): boolean { const origin = request.headers.get('Origin'); return !origin || origin === new URL(request.url).origin; }
 function oauthRedirect(origin: string, status: 'success' | 'error', message?: string): Response {
-  const out = new URL('/', origin);
-  out.searchParams.set('oauth', 'microsoft'); out.searchParams.set('status', status);
-  if (message) out.searchParams.set('message', message.slice(0, 250));
-  return Response.redirect(out.toString(), 302);
+  const out = new URL('/', origin); out.searchParams.set('oauth', 'microsoft'); out.searchParams.set('status', status);
+  if (message) out.searchParams.set('message', message.slice(0, 250)); return Response.redirect(out.toString(), 302);
 }
 
 async function api(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.pathname;
+  const url = new URL(request.url); const path = url.pathname;
 
   if (path === '/api/login' && request.method === 'POST') {
     const body = await request.json().catch(() => ({})) as { password?: string };
@@ -142,14 +143,10 @@ async function api(request: Request, env: Env): Promise<Response> {
     const token = await createSession(env);
     return json({ ok: true }, 200, { 'Set-Cookie': `cloudmail_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000` });
   }
-
-  if (path === '/api/logout' && request.method === 'POST') {
-    return json({ ok: true }, 200, { 'Set-Cookie': 'cloudmail_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
-  }
+  if (path === '/api/logout' && request.method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': 'cloudmail_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
 
   if (path === '/api/oauth/microsoft/callback' && request.method === 'GET') {
-    const state = url.searchParams.get('state') || '';
-    const code = url.searchParams.get('code') || '';
+    const state = url.searchParams.get('state') || ''; const code = url.searchParams.get('code') || '';
     const oauthError = url.searchParams.get('error_description') || url.searchParams.get('error');
     if (!state) return oauthRedirect(url.origin, 'error', oauthError || 'Missing OAuth state');
     const pending = await env.DB.prepare("SELECT * FROM oauth_states WHERE state = ? AND provider = 'microsoft' AND created_at > datetime('now','-15 minutes')").bind(state).first<OAuthStateRow>();
@@ -159,11 +156,8 @@ async function api(request: Request, env: Env): Promise<Response> {
     try {
       const token = await exchangeMicrosoftCode(env, code, pending.redirect_uri);
       const email = token.email && validEmail(token.email) ? token.email : pending.email;
-      const encrypted = await encryptCredential(env.CREDENTIAL_KEY, token.refreshToken);
-      const id = crypto.randomUUID();
-      await env.DB.prepare(`INSERT INTO mail_accounts
-        (id,label,email,provider,auth_type,imap_host,imap_port,imap_security,smtp_host,smtp_port,smtp_security,username,credential_ciphertext,credential_iv)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      const encrypted = await encryptCredential(env.CREDENTIAL_KEY, token.refreshToken); const id = crypto.randomUUID();
+      await env.DB.prepare(`INSERT INTO mail_accounts (id,label,email,provider,auth_type,imap_host,imap_port,imap_security,smtp_host,smtp_port,smtp_security,username,credential_ciphertext,credential_iv) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
         .bind(id, pending.label, email, 'outlook', 'oauth_microsoft', 'outlook.office365.com', 993, 'tls', 'smtp.office365.com', 587, 'starttls', email, encrypted.ciphertext, encrypted.iv).run();
       return oauthRedirect(url.origin, 'success');
     } catch (err) { return oauthRedirect(url.origin, 'error', errorMessage(err)); }
@@ -195,14 +189,13 @@ async function api(request: Request, env: Env): Promise<Response> {
     const input = await request.json() as MailAccountInput;
     if (input.provider === 'outlook') return json({ error: 'Outlook/Microsoft accounts must be added with Microsoft OAuth' }, 400);
     const invalid = validateAccount(input); if (invalid) return json({ error: invalid }, 400);
-    const id = crypto.randomUUID(); const encrypted = await encryptCredential(env.CREDENTIAL_KEY, input.password);
-    const px = await proxyValues(env, input);
+    const id = crypto.randomUUID(); const encrypted = await encryptCredential(env.CREDENTIAL_KEY, input.password); const px = await proxyValues(env, input);
     await env.DB.prepare(`INSERT INTO mail_accounts
-      (id,label,email,provider,auth_type,imap_host,imap_port,imap_security,smtp_host,smtp_port,smtp_security,username,credential_ciphertext,credential_iv,proxy_mode,proxy_host,proxy_port,proxy_username,proxy_password_ciphertext,proxy_password_iv)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      (id,label,email,provider,auth_type,imap_host,imap_port,imap_security,smtp_host,smtp_port,smtp_security,username,credential_ciphertext,credential_iv,proxy_mode,proxy_host,proxy_port,proxy_username,proxy_password_ciphertext,proxy_password_iv,proxy_method)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .bind(id, input.label.trim(), input.email.trim(), input.provider || 'custom', 'password', input.imapHost.trim(), input.imapPort,
         input.imapSecurity, input.smtpHost.trim(), input.smtpPort, input.smtpSecurity, input.username.trim(), encrypted.ciphertext, encrypted.iv,
-        px.mode, px.host, px.port, px.username, px.ciphertext, px.iv).run();
+        px.mode, px.host, px.port, px.username, px.ciphertext, px.iv, px.method).run();
     return json({ account: publicAccount((await getAccount(env, id))!) }, 201);
   }
 
@@ -210,37 +203,34 @@ async function api(request: Request, env: Env): Promise<Response> {
   if (accountMatch && request.method === 'PUT') {
     const account = await getAccount(env, accountMatch[1]); if (!account) return json({ error: 'Account not found' }, 404);
     const input = await request.json() as MailAccountInput;
-    const proxyError = validateProxy(input); if (proxyError) return json({ error: proxyError }, 400);
+    const proxyError = validateProxy(input, account); if (proxyError) return json({ error: proxyError }, 400);
     const px = await proxyValues(env, input, account);
 
     if (account.auth_type === 'oauth_microsoft') {
       if (!input.label?.trim()) return json({ error: 'Label is required' }, 400);
-      await env.DB.prepare(`UPDATE mail_accounts SET label=?, proxy_mode=?, proxy_host=?, proxy_port=?, proxy_username=?, proxy_password_ciphertext=?, proxy_password_iv=?, last_error=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-        .bind(input.label.trim(), px.mode, px.host, px.port, px.username, px.ciphertext, px.iv, account.id).run();
+      await env.DB.prepare(`UPDATE mail_accounts SET label=?,proxy_mode=?,proxy_host=?,proxy_port=?,proxy_username=?,proxy_password_ciphertext=?,proxy_password_iv=?,proxy_method=?,last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .bind(input.label.trim(), px.mode, px.host, px.port, px.username, px.ciphertext, px.iv, px.method, account.id).run();
     } else {
-      const invalid = validateAccount(input, false); if (invalid) return json({ error: invalid }, 400);
+      const invalid = validateAccount(input, false, account); if (invalid) return json({ error: invalid }, 400);
       if (input.password?.trim()) {
         const encrypted = await encryptCredential(env.CREDENTIAL_KEY, input.password);
-        await env.DB.prepare(`UPDATE mail_accounts SET label=?,email=?,imap_host=?,imap_port=?,imap_security=?,smtp_host=?,smtp_port=?,smtp_security=?,username=?,credential_ciphertext=?,credential_iv=?,proxy_mode=?,proxy_host=?,proxy_port=?,proxy_username=?,proxy_password_ciphertext=?,proxy_password_iv=?,last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-          .bind(input.label.trim(), input.email.trim(), input.imapHost.trim(), input.imapPort, input.imapSecurity, input.smtpHost.trim(), input.smtpPort, input.smtpSecurity, input.username.trim(), encrypted.ciphertext, encrypted.iv, px.mode, px.host, px.port, px.username, px.ciphertext, px.iv, account.id).run();
+        await env.DB.prepare(`UPDATE mail_accounts SET label=?,email=?,imap_host=?,imap_port=?,imap_security=?,smtp_host=?,smtp_port=?,smtp_security=?,username=?,credential_ciphertext=?,credential_iv=?,proxy_mode=?,proxy_host=?,proxy_port=?,proxy_username=?,proxy_password_ciphertext=?,proxy_password_iv=?,proxy_method=?,last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+          .bind(input.label.trim(), input.email.trim(), input.imapHost.trim(), input.imapPort, input.imapSecurity, input.smtpHost.trim(), input.smtpPort, input.smtpSecurity, input.username.trim(), encrypted.ciphertext, encrypted.iv, px.mode, px.host, px.port, px.username, px.ciphertext, px.iv, px.method, account.id).run();
       } else {
-        await env.DB.prepare(`UPDATE mail_accounts SET label=?,email=?,imap_host=?,imap_port=?,imap_security=?,smtp_host=?,smtp_port=?,smtp_security=?,username=?,proxy_mode=?,proxy_host=?,proxy_port=?,proxy_username=?,proxy_password_ciphertext=?,proxy_password_iv=?,last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-          .bind(input.label.trim(), input.email.trim(), input.imapHost.trim(), input.imapPort, input.imapSecurity, input.smtpHost.trim(), input.smtpPort, input.smtpSecurity, input.username.trim(), px.mode, px.host, px.port, px.username, px.ciphertext, px.iv, account.id).run();
+        await env.DB.prepare(`UPDATE mail_accounts SET label=?,email=?,imap_host=?,imap_port=?,imap_security=?,smtp_host=?,smtp_port=?,smtp_security=?,username=?,proxy_mode=?,proxy_host=?,proxy_port=?,proxy_username=?,proxy_password_ciphertext=?,proxy_password_iv=?,proxy_method=?,last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+          .bind(input.label.trim(), input.email.trim(), input.imapHost.trim(), input.imapPort, input.imapSecurity, input.smtpHost.trim(), input.smtpPort, input.smtpSecurity, input.username.trim(), px.mode, px.host, px.port, px.username, px.ciphertext, px.iv, px.method, account.id).run();
       }
     }
     return json({ account: publicAccount((await getAccount(env, account.id))!) });
   }
 
-  if (accountMatch && request.method === 'DELETE') {
-    await env.DB.prepare('DELETE FROM mail_accounts WHERE id = ?').bind(accountMatch[1]).run(); return json({ ok: true });
-  }
+  if (accountMatch && request.method === 'DELETE') { await env.DB.prepare('DELETE FROM mail_accounts WHERE id = ?').bind(accountMatch[1]).run(); return json({ ok: true }); }
 
   const testMatch = path.match(/^\/api\/accounts\/([^/]+)\/test$/);
   if (testMatch && request.method === 'POST') {
     const account = await getAccount(env, testMatch[1]); if (!account) return json({ error: 'Account not found' }, 404);
-    try {
-      await withImap(await imapCfg(env, account), client => client.recent(1)); await markAccount(env, account.id, true); return json({ ok: true });
-    } catch (err) { const msg = errorMessage(err); await markAccount(env, account.id, false, msg); return json({ error: msg }, 502); }
+    try { await withImap(await imapCfg(env, account), client => client.recent(1)); await markAccount(env, account.id, true); return json({ ok: true }); }
+    catch (err) { const msg = errorMessage(err); await markAccount(env, account.id, false, msg); return json({ error: msg }, 502); }
   }
 
   if (path === '/api/inbox' && request.method === 'GET') {
@@ -262,19 +252,16 @@ async function api(request: Request, env: Env): Promise<Response> {
   const msgMatch = path.match(/^\/api\/accounts\/([^/]+)\/messages\/(\d+)$/);
   if (msgMatch && request.method === 'GET') {
     const account = await getAccount(env, msgMatch[1]); if (!account) return json({ error: 'Account not found' }, 404);
-    try {
-      const raw = await withImap(await imapCfg(env, account), client => client.fetchRaw(Number(msgMatch[2])));
-      return json({ message: parseMessage(raw), account: publicAccount(account) });
-    } catch (err) { return json({ error: errorMessage(err) }, 502); }
+    try { const raw = await withImap(await imapCfg(env, account), client => client.fetchRaw(Number(msgMatch[2]))); return json({ message: parseMessage(raw), account: publicAccount(account) }); }
+    catch (err) { return json({ error: errorMessage(err) }, 502); }
   }
 
   if (path === '/api/send' && request.method === 'POST') {
     const body = await request.json() as { accountId?: string; to?: string; subject?: string; text?: string };
     if (!body.accountId || !body.to?.trim()) return json({ error: 'accountId and to are required' }, 400);
     const account = await getAccount(env, body.accountId); if (!account) return json({ error: 'Account not found' }, 404);
-    try {
-      await sendMail(await smtpCfg(env, account), body.to, body.subject || '', body.text || ''); await markAccount(env, account.id, true); return json({ ok: true });
-    } catch (err) { const msg = errorMessage(err); await markAccount(env, account.id, false, msg); return json({ error: msg }, 502); }
+    try { await sendMail(await smtpCfg(env, account), body.to, body.subject || '', body.text || ''); await markAccount(env, account.id, true); return json({ ok: true }); }
+    catch (err) { const msg = errorMessage(err); await markAccount(env, account.id, false, msg); return json({ error: msg }, 502); }
   }
 
   return json({ error: 'Not found' }, 404);
