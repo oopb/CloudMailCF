@@ -57,7 +57,7 @@ document.addEventListener('click', () => closeAccountMenus());
 
 async function testAccount(a) {
   closeAccountMenus();
-  toast(`正在测试 ${a.label}…`);
+  toast(`正在测试 ${a.label}${a.proxyMode === 'socks5' ? '（SOCKS5）' : ''}…`);
   try {
     await api(`/api/accounts/${a.id}/test`, { method: 'POST' });
     toast(`${a.label} 连接成功`);
@@ -75,6 +75,23 @@ async function deleteAccount(a) {
   await loadAccounts(); await loadInbox();
 }
 
+function toggleProxyFields() {
+  const enabled = $('#proxyMode').value === 'socks5';
+  $('#socks5Fields').classList.toggle('hidden', !enabled);
+  $('#proxyHost').required = enabled;
+  $('#proxyPort').required = enabled;
+}
+
+function resetProxyFields() {
+  $('#proxyMode').value = 'direct';
+  $('#proxyHost').value = '';
+  $('#proxyPort').value = 1080;
+  $('#proxyUsername').value = '';
+  $('#proxyPassword').value = '';
+  $('#proxyPassword').placeholder = '可选';
+  toggleProxyFields();
+}
+
 function prepareAddDialog() {
   state.editingAccountId = null;
   $('#accountForm').reset();
@@ -86,6 +103,7 @@ function prepareAddDialog() {
   $('#accountDialog .modal-head p').textContent = 'QQ/Gmail/通用邮箱使用密码或授权码；Outlook / Microsoft 365 使用 Microsoft OAuth。';
   $('#provider').value = 'qq';
   applyPreset('qq');
+  resetProxyFields();
   $('#saveAccountBtn').textContent = '保存邮箱';
 }
 
@@ -106,6 +124,13 @@ function openEditAccount(a) {
   $('#smtpSecurity').value = a.smtpSecurity || 'tls';
   $('#mailPassword').value = '';
   $('#mailPassword').placeholder = '留空则保持现有密码 / 授权码';
+  $('#proxyMode').value = a.proxyMode || 'direct';
+  $('#proxyHost').value = a.proxyHost || '';
+  $('#proxyPort').value = a.proxyPort || 1080;
+  $('#proxyUsername').value = a.proxyUsername || '';
+  $('#proxyPassword').value = '';
+  $('#proxyPassword').placeholder = a.hasProxyPassword ? '留空则保持现有代理密码' : '可选';
+  toggleProxyFields();
   $('#accountDialog .modal-head h3').textContent = '编辑邮箱设置';
 
   if (a.authType === 'oauth_microsoft') {
@@ -114,14 +139,14 @@ function openEditAccount(a) {
     $('#saveAccountBtn').classList.remove('hidden');
     $('#saveAccountBtn').textContent = '保存修改';
     $('#email').readOnly = true;
-    $('#accountDialog .modal-head p').textContent = 'Microsoft OAuth 账户当前可修改显示名称；邮箱地址和认证信息由 Microsoft 授权维护。';
+    $('#accountDialog .modal-head p').textContent = 'Microsoft OAuth 账户可修改显示名称和代理设置；邮箱地址和认证信息由 Microsoft 授权维护。';
   } else {
     $('#credentialFields').classList.remove('hidden');
     $('#microsoftOauthFields').classList.add('hidden');
     $('#saveAccountBtn').classList.remove('hidden');
     $('#saveAccountBtn').textContent = '保存修改';
     $('#email').readOnly = false;
-    $('#accountDialog .modal-head p').textContent = '可修改邮箱地址、服务器、用户名；密码留空则保持现有凭据。';
+    $('#accountDialog .modal-head p').textContent = '可修改邮箱、服务器和 SOCKS5；密码留空则保持现有凭据。';
     for (const id of ['username', 'imapHost', 'imapPort', 'smtpHost', 'smtpPort']) $(`#${id}`).required = true;
     $('#mailPassword').required = false;
   }
@@ -135,9 +160,10 @@ async function loadAccounts() {
   for (const a of state.accounts) {
     const item = document.createElement('div'); item.className = 'account-item';
     const oauthBadge = a.authType === 'oauth_microsoft' ? ' · OAuth' : '';
+    const proxyBadge = a.proxyMode === 'socks5' ? ' · SOCKS5' : '';
     item.innerHTML = `
       <span class="dot ${a.lastError ? 'error' : ''}"></span>
-      <div class="account-info"><strong>${esc(a.label)}</strong><small>${esc(a.email)}${oauthBadge}</small></div>
+      <div class="account-info"><strong>${esc(a.label)}</strong><small>${esc(a.email)}${oauthBadge}${proxyBadge}</small></div>
       <div class="account-actions">
         <button class="account-menu-btn" type="button" title="更多操作" aria-label="${esc(a.label)} 更多操作">•••</button>
         <div class="account-menu" role="menu">
@@ -207,6 +233,7 @@ $('#logoutBtn').onclick = async () => { await api('/api/logout', { method: 'POST
 $('#addAccountBtn').onclick = () => { prepareAddDialog(); $('#accountDialog').showModal(); };
 document.querySelectorAll('.close-dialog').forEach(b => b.onclick = () => { state.editingAccountId = null; $('#accountDialog').close(); });
 $('#provider').onchange = e => applyPreset(e.target.value);
+$('#proxyMode').onchange = toggleProxyFields;
 $('#email').oninput = e => { if (!$('#username').dataset.touched) $('#username').value = e.target.value; };
 $('#username').oninput = () => $('#username').dataset.touched = '1';
 
@@ -237,14 +264,16 @@ $('#microsoftOAuthBtn').onclick = async () => {
 $('#accountForm').addEventListener('submit', async e => {
   e.preventDefault();
   const editing = state.editingAccountId ? state.accounts.find(a => a.id === state.editingAccountId) : null;
-  const b = $('#saveAccountBtn'); b.disabled = true; b.textContent = editing ? '保存中…' : '保存中…';
+  const b = $('#saveAccountBtn'); b.disabled = true; b.textContent = '保存中…';
 
   if (!editing && $('#provider').value === 'outlook') { b.disabled = false; return; }
 
   const body = {
     provider: $('#provider').value, label: $('#label').value, email: $('#email').value, username: $('#username').value,
     password: $('#mailPassword').value, imapHost: $('#imapHost').value, imapPort: Number($('#imapPort').value), imapSecurity: $('#imapSecurity').value,
-    smtpHost: $('#smtpHost').value, smtpPort: Number($('#smtpPort').value), smtpSecurity: $('#smtpSecurity').value
+    smtpHost: $('#smtpHost').value, smtpPort: Number($('#smtpPort').value), smtpSecurity: $('#smtpSecurity').value,
+    proxyMode: $('#proxyMode').value, proxyHost: $('#proxyHost').value, proxyPort: Number($('#proxyPort').value),
+    proxyUsername: $('#proxyUsername').value, proxyPassword: $('#proxyPassword').value
   };
 
   try {
@@ -258,7 +287,7 @@ $('#accountForm').addEventListener('submit', async e => {
       await loadAccounts(); await loadInbox();
     } else {
       const created = await api('/api/accounts', { method: 'POST', body: JSON.stringify(body) });
-      $('#accountDialog').close(); $('#accountForm').reset(); $('#username').dataset.touched = ''; $('#provider').value = 'qq'; applyPreset('qq');
+      $('#accountDialog').close(); $('#accountForm').reset(); $('#username').dataset.touched = ''; $('#provider').value = 'qq'; applyPreset('qq'); resetProxyFields();
       toast('邮箱已保存，正在测试 IMAP…'); await loadAccounts();
       try { await api(`/api/accounts/${created.account.id}/test`, { method: 'POST' }); toast('连接成功'); } catch (err) { toast(`已保存，但连接测试失败：${err.message}`, true); }
       await loadAccounts(); await loadInbox();
