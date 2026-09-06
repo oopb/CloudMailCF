@@ -91,15 +91,41 @@
 
       <details id="proxySettings">
         <summary>代理设置（按邮箱独立配置）</summary>
-        <label>连接方式<select id="proxyMode"><option value="direct">直连</option><option value="socks5">SOCKS5 代理</option></select></label>
+        <label>连接方式<select id="proxyMode"><option value="direct">直连</option><option value="socks5">SOCKS5 代理</option><option value="shadowsocks">Shadowsocks</option></select></label>
+
+        <div id="proxyCommonFields" class="hidden">
+          <div class="grid2">
+            <label>代理 / SS 主机<input id="proxyHost" placeholder="例如 1.2.3.4 或 proxy.example.com" /></label>
+            <label>端口<input id="proxyPort" type="number" value="1080" min="1" max="65535" /></label>
+          </div>
+        </div>
+
         <div id="socks5Fields" class="hidden">
           <div class="grid2">
-            <label>代理主机<input id="proxyHost" placeholder="例如 1.2.3.4 或 proxy.example.com" /></label>
-            <label>代理端口<input id="proxyPort" type="number" value="1080" min="1" max="65535" /></label>
             <label>代理用户名<input id="proxyUsername" autocomplete="off" placeholder="可选" /></label>
             <label>代理密码<input id="proxyPassword" type="password" autocomplete="new-password" placeholder="可选" /></label>
           </div>
           <div class="proxy-note">仅当前邮箱的 IMAP/SMTP 会经过该 SOCKS5。密码会使用 CREDENTIAL_KEY 加密保存。</div>
+        </div>
+
+        <div id="shadowsocksFields" class="hidden">
+          <label>加密方法
+            <select id="proxyMethod">
+              <optgroup label="AEAD">
+                <option value="aes-128-gcm">aes-128-gcm</option>
+                <option value="aes-256-gcm">aes-256-gcm</option>
+                <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+              </optgroup>
+              <optgroup label="AEAD 2022">
+                <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
+                <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+                <option value="2022-blake3-chacha20-poly1305">2022-blake3-chacha20-poly1305</option>
+                <option value="2022-blake3-chacha8-poly1305">2022-blake3-chacha8-poly1305</option>
+              </optgroup>
+            </select>
+          </label>
+          <label>Shadowsocks 密码 / PSK<input id="ssPassword" type="password" autocomplete="new-password" placeholder="编辑时留空则保持现有值" /></label>
+          <div class="proxy-note">2022 系列要求 Base64 PSK：aes-128 为 16 字节；aes-256 / chacha 为 32 字节。该值会使用 CREDENTIAL_KEY 加密保存。</div>
         </div>
       </details>
 
