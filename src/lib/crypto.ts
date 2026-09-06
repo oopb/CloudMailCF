@@ -26,8 +26,16 @@ function b64url(bytes: Uint8Array): string {
   return bytesToB64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+function requireValue(name: string, value: string | undefined): string {
+  if (!value || !value.trim()) {
+    throw new Error(`CloudMail configuration error: ${name} is not configured in the Worker runtime environment`);
+  }
+  return value;
+}
+
 async function aesKey(secret: string): Promise<CryptoKey> {
-  const digest = await crypto.subtle.digest('SHA-256', enc.encode(secret));
+  const safeSecret = requireValue('CREDENTIAL_KEY', secret);
+  const digest = await crypto.subtle.digest('SHA-256', enc.encode(safeSecret));
   return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
@@ -53,7 +61,8 @@ export async function decryptCredential(secret: string, ciphertext: string, iv: 
 }
 
 async function hmac(secret: string, message: string): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const safeSecret = requireValue('SESSION_SECRET', secret);
+  const key = await crypto.subtle.importKey('raw', enc.encode(safeSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(message)));
 }
 
@@ -65,9 +74,10 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 export async function verifyAdminPassword(env: Env, password: string): Promise<boolean> {
+  const adminPassword = requireValue('ADMIN_PASSWORD', env.ADMIN_PASSWORD);
   const [a, b] = await Promise.all([
     crypto.subtle.digest('SHA-256', enc.encode(password)),
-    crypto.subtle.digest('SHA-256', enc.encode(env.ADMIN_PASSWORD))
+    crypto.subtle.digest('SHA-256', enc.encode(adminPassword))
   ]);
   return timingSafeEqual(new Uint8Array(a), new Uint8Array(b));
 }
