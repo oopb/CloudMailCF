@@ -3,14 +3,16 @@ import net from 'node:net';
 import tls from 'node:tls';
 import type { Socket as NodeSocket } from 'node:net';
 import type { TLSSocket } from 'node:tls';
+import type { Duplex } from 'node:stream';
 import type { ProxyConfig, SecurityMode } from '../types';
+import { openShadowsocksTunnel } from './shadowsocks';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-type NodeAnySocket = NodeSocket | TLSSocket;
+type NodeAnySocket = NodeSocket | TLSSocket | Duplex;
 
-function waitEvent(socket: NodeAnySocket, event: 'connect' | 'secureConnect'): Promise<void> {
+function waitEvent(socket: NodeSocket | TLSSocket, event: 'connect' | 'secureConnect'): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = (err: Error) => { cleanup(); reject(err); };
     const onReady = () => { cleanup(); resolve(); };
@@ -128,7 +130,7 @@ class NodeChannel implements ChannelImpl {
   }
 
   private bindSocket(socket: NodeAnySocket) {
-    socket.on('data', chunk => {
+    socket.on('data', (chunk: Uint8Array) => {
       const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength).slice();
       this.chunks.push(bytes);
       this.buffered += bytes.length;
@@ -136,7 +138,7 @@ class NodeChannel implements ChannelImpl {
     });
     socket.once('end', () => { this.ended = true; this.flushWaiters(); });
     socket.once('close', () => { this.ended = true; this.flushWaiters(); });
-    socket.once('error', err => { this.failure = err instanceof Error ? err : new Error(String(err)); this.flushWaiters(); });
+    socket.once('error', (err: Error) => { this.failure = err instanceof Error ? err : new Error(String(err)); this.flushWaiters(); });
   }
 
   private flushWaiters() { for (const r of this.waiters.splice(0)) r(); }
@@ -170,9 +172,9 @@ class NodeChannel implements ChannelImpl {
   async upgradeTls(): Promise<void> {
     if (this.secure) return;
     if (this.buffered) throw new Error('Cannot start TLS while unread socket data is buffered');
-    const old = this.socket as NodeSocket;
+    const old = this.socket;
     old.removeAllListeners('data'); old.removeAllListeners('end'); old.removeAllListeners('close'); old.removeAllListeners('error');
-    const secure = tls.connect({ socket: old, servername: this.targetHost });
+    const secure = tls.connect({ socket: old as NodeSocket, servername: this.targetHost });
     await waitEvent(secure, 'secureConnect');
     this.socket = secure;
     this.secure = true;
@@ -219,14 +221,18 @@ export class ByteChannel {
   private constructor(private impl: ChannelImpl) {}
 
   static async open(hostname: string, port: number, security: SecurityMode, proxy?: ProxyConfig): Promise<ByteChannel> {
-    if (!proxy || proxy.mode !== 'socks5') {
+    if (!proxy || proxy.mode === 'direct') {
       const secureTransport = security === 'tls' ? 'on' : security === 'starttls' ? 'starttls' : 'off';
       const socket = cfConnect({ hostname, port }, { secureTransport });
       await socket.opened;
       return new ByteChannel(new CfChannel(socket));
     }
 
-    const socket = await this.openSocks5(hostname, port, proxy);
+    let socket: NodeAnySocket;
+    if (proxy.mode === 'socks5') socket = await this.openSocks5(hostname, port, proxy);
+    else if (proxy.mode === 'shadowsocks') socket = await openShadowsocksTunnel(hostname, port, proxy);
+    else throw new Error(`Unsupported proxy mode: ${String(proxy.mode)}`);
+
     const impl = new NodeChannel(socket, hostname, false);
     if (security === 'tls') await impl.upgradeTls();
     return new ByteChannel(impl);
