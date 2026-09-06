@@ -1,6 +1,6 @@
 {
   "name": "cloudmail-cf",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -26,7 +26,16 @@
         "description": "A long random secret used to sign CloudMail sessions. Generate a unique random value (32+ bytes recommended)."
       },
       "CREDENTIAL_KEY": {
-        "description": "A separate long random secret used to encrypt mailbox passwords/app-passwords with AES-GCM. Do not reuse SESSION_SECRET."
+        "description": "A separate long random secret used to encrypt mailbox passwords, app-passwords and OAuth refresh tokens with AES-GCM. Do not reuse SESSION_SECRET."
+      },
+      "MICROSOFT_CLIENT_ID": {
+        "description": "Microsoft Entra application (client) ID. Required only for Outlook/Microsoft 365 OAuth."
+      },
+      "MICROSOFT_CLIENT_SECRET": {
+        "description": "Microsoft Entra application client secret. Store as a Cloudflare Secret. Required only for Microsoft OAuth."
+      },
+      "MICROSOFT_TENANT": {
+        "description": "Microsoft tenant identifier. Use common to support personal Microsoft accounts and multi-tenant organizational accounts."
       }
     }
   }
