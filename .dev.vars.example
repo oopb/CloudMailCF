@@ -1,0 +1,3 @@
+ADMIN_PASSWORD=change-me
+SESSION_SECRET=generate-a-long-random-secret
+CREDENTIAL_KEY=generate-another-long-random-secret

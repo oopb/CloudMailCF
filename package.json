@@ -1,0 +1,33 @@
+{
+  "name": "cloudmail-cf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "npm run db:migrate:remote && wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "wrangler": "^4.0.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "CloudMail account/configuration database. Cloudflare will provision this D1 database during one-click deployment."
+      },
+      "ADMIN_PASSWORD": {
+        "description": "Password used to sign in to your CloudMail web interface. Use a strong unique password."
+      },
+      "SESSION_SECRET": {
+        "description": "A long random secret used to sign CloudMail sessions. Generate a unique random value (32+ bytes recommended)."
+      },
+      "CREDENTIAL_KEY": {
+        "description": "A separate long random secret used to encrypt mailbox passwords/app-passwords with AES-GCM. Do not reuse SESSION_SECRET."
+      }
+    }
+  }
+}

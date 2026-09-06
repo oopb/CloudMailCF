@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f4f5f7" />
+  <meta name="description" content="A Cloudflare-native multi-account IMAP/SMTP webmail client" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>CloudMail</title>
+</head>
+<body>
+  <div id="toast"></div>
+  <section id="loginView" class="login-shell hidden">
+    <div class="login-card">
+      <div class="brand-mark">✉</div>
+      <h1>CloudMail</h1>
+      <p>一个登录，管理你所有的邮箱。</p>
+      <form id="loginForm">
+        <input id="loginPassword" type="password" autocomplete="current-password" placeholder="管理密码" required />
+        <button class="primary" type="submit">登录</button>
+      </form>
+      <small>账户配置和授权码由你的 Cloudflare Worker 加密保存。</small>
+    </div>
+  </section>
+
+  <div id="appView" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark small">✉</span><strong>CloudMail</strong></div>
+      <button id="composeBtn" class="compose">＋ 写邮件</button>
+      <nav>
+        <button class="nav-item active" data-view="inbox"><span>▣</span>统一收件箱</button>
+        <button class="nav-item" id="refreshBtn"><span>↻</span>刷新</button>
+      </nav>
+      <div class="side-title"><span>邮箱账户</span><button id="addAccountBtn" title="添加邮箱">＋</button></div>
+      <div id="accountList" class="accounts"></div>
+      <div class="sidebar-bottom">
+        <button id="logoutBtn" class="nav-item"><span>⇥</span>退出</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><h2>统一收件箱</h2><p id="statusText">正在载入…</p></div>
+        <button id="mobileMenu" class="icon-btn">☰</button>
+      </header>
+      <div id="failureBanner" class="banner hidden"></div>
+      <div id="messageList" class="message-list"></div>
+      <div id="emptyState" class="empty hidden"><div>✉</div><h3>还没有邮件</h3><p>添加一个邮箱账户后，这里会显示最近邮件。</p></div>
+    </main>
+
+    <section id="reader" class="reader hidden">
+      <div class="reader-toolbar"><button id="closeReader" class="icon-btn">←</button><span id="readerAccount"></span></div>
+      <article>
+        <h2 id="readerSubject"></h2>
+        <div class="reader-meta"><strong id="readerFrom"></strong><span id="readerDate"></span></div>
+        <div id="readerTo" class="reader-to"></div>
+        <div id="readerBody" class="reader-body"></div>
+      </article>
+    </section>
+  </div>
+
+  <dialog id="accountDialog">
+    <form id="accountForm" method="dialog" class="modal-form">
+      <div class="modal-head"><div><h3>添加邮箱</h3><p>支持 QQ、Gmail App Password 和通用 IMAP/SMTP；Microsoft OAuth 将在下一阶段加入。</p></div><button type="button" class="icon-btn close-dialog">×</button></div>
+      <label>快速配置<select id="provider"><option value="qq">QQ Mail</option><option value="gmail">Gmail</option><option value="outlook">Outlook / Microsoft 365</option><option value="custom">自定义</option></select></label>
+      <div class="grid2">
+        <label>显示名称<input id="label" required placeholder="例如：主 QQ" /></label>
+        <label>邮箱地址<input id="email" type="email" required placeholder="name@example.com" /></label>
+      </div>
+      <label>用户名<input id="username" required placeholder="通常与邮箱地址相同" /></label>
+      <label>密码 / 邮箱授权码<input id="mailPassword" type="password" required autocomplete="new-password" /></label>
+      <details>
+        <summary>服务器设置</summary>
+        <div class="grid2">
+          <label>IMAP 主机<input id="imapHost" required /></label><label>IMAP 端口<input id="imapPort" type="number" required /></label>
+          <label>IMAP 安全<select id="imapSecurity"><option value="tls">TLS</option><option value="starttls">STARTTLS</option></select></label><span></span>
+          <label>SMTP 主机<input id="smtpHost" required /></label><label>SMTP 端口<input id="smtpPort" type="number" required /></label>
+          <label>SMTP 安全<select id="smtpSecurity"><option value="tls">TLS</option><option value="starttls">STARTTLS</option></select></label>
+        </div>
+      </details>
+      <div class="modal-actions"><button type="button" class="secondary close-dialog">取消</button><button id="saveAccountBtn" class="primary" type="submit">保存邮箱</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="composeDialog">
+    <form id="composeForm" method="dialog" class="modal-form compose-form">
+      <div class="modal-head"><h3>写邮件</h3><button type="button" class="icon-btn close-compose">×</button></div>
+      <label>发件账户<select id="composeAccount" required></select></label>
+      <label>收件人<input id="composeTo" type="text" required placeholder="name@example.com" /></label>
+      <label>主题<input id="composeSubject" type="text" /></label>
+      <label>正文<textarea id="composeText" rows="12"></textarea></label>
+      <div class="modal-actions"><button type="button" class="secondary close-compose">取消</button><button id="sendBtn" class="primary" type="submit">发送</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
