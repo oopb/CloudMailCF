@@ -4,9 +4,13 @@ export interface Env {
   ADMIN_PASSWORD: string;
   SESSION_SECRET: string;
   CREDENTIAL_KEY: string;
+  MICROSOFT_CLIENT_ID?: string;
+  MICROSOFT_CLIENT_SECRET?: string;
+  MICROSOFT_TENANT?: string;
 }
 
 export type SecurityMode = 'tls' | 'starttls' | 'plain';
+export type AuthType = 'password' | 'oauth_microsoft';
 
 export interface MailAccountInput {
   label: string;
@@ -27,6 +31,7 @@ export interface StoredAccount {
   label: string;
   email: string;
   provider: string;
+  auth_type: AuthType;
   imap_host: string;
   imap_port: number;
   imap_security: SecurityMode;
@@ -40,4 +45,13 @@ export interface StoredAccount {
   updated_at: string;
   last_ok_at: string | null;
   last_error: string | null;
+}
+
+export interface OAuthStateRow {
+  state: string;
+  provider: string;
+  label: string;
+  email: string;
+  redirect_uri: string;
+  created_at: string;
 }
