@@ -10,6 +10,9 @@
     "cf-typegen": "wrangler types",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
+  "dependencies": {
+    "@noble/hashes": "^2.0.1"
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.8.3",
@@ -27,7 +30,7 @@
         "description": "A long random secret used to sign CloudMail sessions. Generate a unique random value (32+ bytes recommended)."
       },
       "CREDENTIAL_KEY": {
-        "description": "A separate long random secret used to encrypt mailbox passwords, app-passwords, OAuth refresh tokens and proxy passwords with AES-GCM. Do not reuse SESSION_SECRET."
+        "description": "A separate long random secret used to encrypt mailbox passwords, app-passwords, OAuth refresh tokens and proxy passwords/PSKs with AES-GCM. Do not reuse SESSION_SECRET."
       },
       "MICROSOFT_CLIENT_ID": {
         "description": "Microsoft Entra application (client) ID. Required only for Outlook/Microsoft 365 OAuth."
