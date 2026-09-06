@@ -235,8 +235,17 @@ async function api(request: Request, env: Env): Promise<Response> {
 
   if (path === '/api/inbox' && request.method === 'GET') {
     const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || 40), 100));
-    const rows = await env.DB.prepare('SELECT * FROM mail_accounts ORDER BY created_at ASC').all<StoredAccount>();
-    const accounts = rows.results; const each = Math.max(5, Math.ceil(limit / Math.max(accounts.length, 1)) + 5);
+    const accountId = url.searchParams.get('accountId')?.trim() || '';
+    let accounts: StoredAccount[];
+    if (accountId) {
+      const account = await getAccount(env, accountId);
+      if (!account) return json({ error: 'Account not found' }, 404);
+      accounts = [account];
+    } else {
+      const rows = await env.DB.prepare('SELECT * FROM mail_accounts ORDER BY created_at ASC').all<StoredAccount>();
+      accounts = rows.results;
+    }
+    const each = accountId ? limit : Math.max(5, Math.ceil(limit / Math.max(accounts.length, 1)) + 5);
     const messages: Array<Record<string, unknown>> = []; const failures: Array<{ accountId: string; error: string }> = [];
     for (const account of accounts) {
       try {
@@ -246,7 +255,7 @@ async function api(request: Request, env: Env): Promise<Response> {
       } catch (err) { const msg = errorMessage(err); failures.push({ accountId: account.id, error: msg }); await markAccount(env, account.id, false, msg); }
     }
     messages.sort((a, b) => (Date.parse(String(b.date || '')) || 0) - (Date.parse(String(a.date || '')) || 0));
-    return json({ messages: messages.slice(0, limit), failures });
+    return json({ messages: messages.slice(0, limit), failures, accountCount: accounts.length, accountId: accountId || null });
   }
 
   const msgMatch = path.match(/^\/api\/accounts\/([^/]+)\/messages\/(\d+)$/);
