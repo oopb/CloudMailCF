@@ -8,7 +8,9 @@ export interface ImapConfig {
   port: number;
   security: SecurityMode;
   username: string;
-  password: string;
+  password?: string;
+  accessToken?: string;
+  authType?: 'password' | 'xoauth2';
 }
 
 export interface MailSummary {
@@ -23,6 +25,13 @@ export interface MailSummary {
 
 function quote(s: string): string {
   return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function b64Ascii(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
 }
 
 function decodeMimeWord(value: string): string {
@@ -82,9 +91,19 @@ class ImapClient {
     }
 
     const tag = this.tag();
-    await this.ch.writeLine(`${tag} LOGIN ${quote(this.cfg.username)} ${quote(this.cfg.password)}`);
+    if (this.cfg.authType === 'xoauth2') {
+      if (!this.cfg.accessToken) throw new Error('IMAP XOAUTH2 access token is missing');
+      const sasl = b64Ascii(`user=${this.cfg.username}\x01auth=Bearer ${this.cfg.accessToken}\x01\x01`);
+      await this.ch.writeLine(`${tag} AUTHENTICATE XOAUTH2 ${sasl}`);
+    } else {
+      if (!this.cfg.password) throw new Error('IMAP password is missing');
+      await this.ch.writeLine(`${tag} LOGIN ${quote(this.cfg.username)} ${quote(this.cfg.password)}`);
+    }
     const lines = await this.readTagged(tag);
-    if (!lines.at(-1)?.startsWith(`${tag} OK`)) throw new Error(`IMAP login failed: ${lines.at(-1)}`);
+    if (!lines.at(-1)?.startsWith(`${tag} OK`)) {
+      const mode = this.cfg.authType === 'xoauth2' ? 'XOAUTH2' : 'login';
+      throw new Error(`IMAP ${mode} failed: ${lines.at(-1)}`);
+    }
   }
 
   private async readTagged(tag: string): Promise<string[]> {
@@ -92,6 +111,9 @@ class ImapClient {
     while (true) {
       const line = await this.ch.readLine();
       out.push(line);
+      if (line.startsWith('+ ') && this.cfg.authType === 'xoauth2') {
+        await this.ch.writeLine('');
+      }
       if (line.startsWith(`${tag} `)) return out;
     }
   }
