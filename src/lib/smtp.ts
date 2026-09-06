@@ -1,6 +1,6 @@
 import { ByteChannel } from './channel';
 import { encodeBodyBase64, encodeHeaderUtf8 } from './mime';
-import type { SecurityMode } from '../types';
+import type { ProxyConfig, SecurityMode } from '../types';
 
 export interface SmtpConfig {
   host: string;
@@ -11,6 +11,7 @@ export interface SmtpConfig {
   accessToken?: string;
   authType?: 'password' | 'xoauth2';
   from: string;
+  proxy?: ProxyConfig;
 }
 
 function b64Ascii(s: string): string {
@@ -39,7 +40,7 @@ async function expect(ch: ByteChannel, accepted: number[]): Promise<string[]> {
 
 export async function sendMail(cfg: SmtpConfig, to: string, subject: string, text: string): Promise<void> {
   if (cfg.port === 25) throw new Error('Cloudflare Workers blocks outbound SMTP port 25; use 465 or 587.');
-  const ch = await ByteChannel.open(cfg.host, cfg.port, cfg.security);
+  const ch = await ByteChannel.open(cfg.host, cfg.port, cfg.security, cfg.proxy);
   try {
     await expect(ch, [220]);
     await ch.writeLine('EHLO cloudmail.local');
