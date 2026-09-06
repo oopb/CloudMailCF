@@ -5,19 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "npm run db:migrate:remote && wrangler deploy",
+    "deploy": "wrangler deploy && npm run db:migrate:remote",
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.45.0"
   },
   "cloudflare": {
     "bindings": {
       "DB": {
-        "description": "CloudMail account/configuration database. Cloudflare will provision this D1 database during one-click deployment."
+        "description": "CloudMail account/configuration database. Cloudflare will provision this D1 database during deployment."
       },
       "ADMIN_PASSWORD": {
         "description": "Password used to sign in to your CloudMail web interface. Use a strong unique password."
