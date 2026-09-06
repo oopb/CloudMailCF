@@ -16,6 +16,12 @@ function b64ToBytes(s: string): Uint8Array {
   return out;
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function b64url(bytes: Uint8Array): string {
   return bytesToB64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
@@ -28,13 +34,21 @@ async function aesKey(secret: string): Promise<CryptoKey> {
 export async function encryptCredential(secret: string, plaintext: string): Promise<{ ciphertext: string; iv: string }> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await aesKey(secret);
-  const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+  const cipher = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+    key,
+    enc.encode(plaintext)
+  );
   return { ciphertext: bytesToB64(new Uint8Array(cipher)), iv: bytesToB64(iv) };
 }
 
 export async function decryptCredential(secret: string, ciphertext: string, iv: string): Promise<string> {
   const key = await aesKey(secret);
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(iv) }, key, b64ToBytes(ciphertext));
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: toArrayBuffer(b64ToBytes(iv)) },
+    key,
+    toArrayBuffer(b64ToBytes(ciphertext))
+  );
   return dec.decode(plain);
 }
 
