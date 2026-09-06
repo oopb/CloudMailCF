@@ -7,7 +7,9 @@ export interface SmtpConfig {
   port: number;
   security: SecurityMode;
   username: string;
-  password: string;
+  password?: string;
+  accessToken?: string;
+  authType?: 'password' | 'xoauth2';
   from: string;
 }
 
@@ -51,12 +53,20 @@ export async function sendMail(cfg: SmtpConfig, to: string, subject: string, tex
       await expect(ch, [250]);
     }
 
-    await ch.writeLine('AUTH LOGIN');
-    await expect(ch, [334]);
-    await ch.writeLine(b64Ascii(cfg.username));
-    await expect(ch, [334]);
-    await ch.writeLine(b64Ascii(cfg.password));
-    await expect(ch, [235]);
+    if (cfg.authType === 'xoauth2') {
+      if (!cfg.accessToken) throw new Error('SMTP XOAUTH2 access token is missing');
+      const sasl = b64Ascii(`user=${cfg.username}\x01auth=Bearer ${cfg.accessToken}\x01\x01`);
+      await ch.writeLine(`AUTH XOAUTH2 ${sasl}`);
+      await expect(ch, [235]);
+    } else {
+      if (!cfg.password) throw new Error('SMTP password is missing');
+      await ch.writeLine('AUTH LOGIN');
+      await expect(ch, [334]);
+      await ch.writeLine(b64Ascii(cfg.username));
+      await expect(ch, [334]);
+      await ch.writeLine(b64Ascii(cfg.password));
+      await expect(ch, [235]);
+    }
 
     await ch.writeLine(`MAIL FROM:<${addr(cfg.from)}>`);
     await expect(ch, [250]);
