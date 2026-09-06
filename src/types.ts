@@ -11,7 +11,15 @@ export interface Env {
 
 export type SecurityMode = 'tls' | 'starttls' | 'plain';
 export type AuthType = 'password' | 'oauth_microsoft';
-export type ProxyMode = 'direct' | 'socks5';
+export type ProxyMode = 'direct' | 'socks5' | 'shadowsocks';
+export type ShadowsocksMethod =
+  | 'aes-128-gcm'
+  | 'aes-256-gcm'
+  | 'chacha20-ietf-poly1305'
+  | '2022-blake3-aes-128-gcm'
+  | '2022-blake3-aes-256-gcm'
+  | '2022-blake3-chacha20-poly1305'
+  | '2022-blake3-chacha8-poly1305';
 
 export interface ProxyConfig {
   mode: ProxyMode;
@@ -19,6 +27,7 @@ export interface ProxyConfig {
   port?: number;
   username?: string;
   password?: string;
+  ssMethod?: ShadowsocksMethod;
 }
 
 export interface MailAccountInput {
@@ -38,6 +47,7 @@ export interface MailAccountInput {
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
+  proxyMethod?: ShadowsocksMethod;
 }
 
 export interface StoredAccount {
@@ -61,6 +71,7 @@ export interface StoredAccount {
   proxy_username: string | null;
   proxy_password_ciphertext: string | null;
   proxy_password_iv: string | null;
+  proxy_method: ShadowsocksMethod | null;
   created_at: string;
   updated_at: string;
   last_ok_at: string | null;
