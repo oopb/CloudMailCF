@@ -1,5 +1,5 @@
 import { ByteChannel } from './channel';
-import type { SecurityMode } from '../types';
+import type { ProxyConfig, SecurityMode } from '../types';
 
 const decoder = new TextDecoder();
 
@@ -11,6 +11,7 @@ export interface ImapConfig {
   password?: string;
   accessToken?: string;
   authType?: 'password' | 'xoauth2';
+  proxy?: ProxyConfig;
 }
 
 export interface MailSummary {
@@ -78,7 +79,7 @@ class ImapClient {
   private tag(): string { return `A${String(this.tagNo++).padStart(4, '0')}`; }
 
   async connect(): Promise<void> {
-    this.ch = await ByteChannel.open(this.cfg.host, this.cfg.port, this.cfg.security);
+    this.ch = await ByteChannel.open(this.cfg.host, this.cfg.port, this.cfg.security, this.cfg.proxy);
     const greeting = await this.ch.readLine();
     if (!/^\* (OK|PREAUTH)/i.test(greeting)) throw new Error(`IMAP greeting rejected: ${greeting}`);
 
@@ -111,9 +112,7 @@ class ImapClient {
     while (true) {
       const line = await this.ch.readLine();
       out.push(line);
-      if (line.startsWith('+ ') && this.cfg.authType === 'xoauth2') {
-        await this.ch.writeLine('');
-      }
+      if (line.startsWith('+ ') && this.cfg.authType === 'xoauth2') await this.ch.writeLine('');
       if (line.startsWith(`${tag} `)) return out;
     }
   }
@@ -126,9 +125,7 @@ class ImapClient {
     return lines;
   }
 
-  async selectInbox(): Promise<void> {
-    await this.simple('SELECT INBOX');
-  }
+  async selectInbox(): Promise<void> { await this.simple('SELECT INBOX'); }
 
   async recent(limit = 20): Promise<MailSummary[]> {
     await this.selectInbox();
@@ -137,10 +134,8 @@ class ImapClient {
     const uids = searchLine.slice(8).trim().split(/\s+/).map(Number).filter(Number.isFinite);
     const selected = uids.slice(-Math.max(1, Math.min(limit, 50)));
     if (!selected.length) return [];
-
     const tag = this.tag();
     await this.ch.writeLine(`${tag} UID FETCH ${selected.join(',')} (UID FLAGS BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE MESSAGE-ID)])`);
-
     const messages: MailSummary[] = [];
     let pendingLine = '';
     while (true) {
@@ -152,21 +147,10 @@ class ImapClient {
       if (/^\* \d+ FETCH /i.test(line)) pendingLine = line;
       const lit = line.match(/\{(\d+)\}$/);
       if (lit) {
-        const n = Number(lit[1]);
-        const rawHeaders = decoder.decode(await this.ch.readExact(n));
+        const rawHeaders = decoder.decode(await this.ch.readExact(Number(lit[1])));
         const headers = unfoldHeaders(rawHeaders);
         const uidMatch = pendingLine.match(/UID (\d+)/i);
-        if (uidMatch) {
-          messages.push({
-            uid: Number(uidMatch[1]),
-            subject: headers.subject || '(No subject)',
-            from: headers.from || '',
-            to: headers.to || '',
-            date: headers.date || '',
-            messageId: headers['message-id'] || '',
-            flags: parseFlags(pendingLine)
-          });
-        }
+        if (uidMatch) messages.push({ uid: Number(uidMatch[1]), subject: headers.subject || '(No subject)', from: headers.from || '', to: headers.to || '', date: headers.date || '', messageId: headers['message-id'] || '', flags: parseFlags(pendingLine) });
       }
     }
     return messages;
